@@ -62,22 +62,40 @@ class DecisionRepository:
     db: AsyncSession,
     decision_id,
     status: str,
-    ref_number: str | None = None
+    ref_number: str | None = None,
+    tp_algo_id: int | None = None,
+    sl_algo_id: int | None = None,
+    close_reason: str | None = None
   ):
     result = await db.execute(
-      select(Decision).where(Decision.id == decision_id)
+      select(Decision).where(
+        Decision.id == decision_id
+      )
     )
+
     decision = result.scalar_one_or_none()
 
     if decision is None:
       return None
 
     decision.status = status
+
     if ref_number is not None:
       decision.ref_number = ref_number
 
-    decision.updated_at = datetime.utcnow()
+    if tp_algo_id is not None:
+      decision.tp_algo_id = tp_algo_id
+
+    if sl_algo_id is not None:
+      decision.sl_algo_id = sl_algo_id
+
+    if close_reason is not None:
+      decision.close_reason = close_reason
+
+    decision.updated_at = datetime.now()
+
     await db.commit()
+
     return decision
 
   @classmethod

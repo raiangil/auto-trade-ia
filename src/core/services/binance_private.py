@@ -158,14 +158,18 @@ class BinanceService:
     tp: float,
     sl: float
   ):
-    """Crea TP y SL usando Algo Order API. Si falla por precio, cierra posición."""
+    """Crea TP/SL y retorna sus algoId."""
     _, price_prec = self.precision.get(symbol, (3, 2))
+
     tp = round(tp, price_prec)
     sl = round(sl, price_prec)
     close_side = "SELL" if side == "BUY" else "BUY"
 
+    tp_algo_id = None
+    sl_algo_id = None
+
     try:
-      self._request("POST", "/fapi/v1/algoOrder", {
+      result = self._request("POST", "/fapi/v1/algoOrder", {
         "algoType": "CONDITIONAL",
         "symbol": symbol,
         "side": close_side,
@@ -174,15 +178,19 @@ class BinanceService:
         "closePosition": "true",
         "workingType": "CONTRACT_PRICE"
       })
+
+      tp_algo_id = result.get("algoId")
+
     except Exception as e:
       print(f"Error creando TP para {symbol}: {e}")
+
       if "-2021" in str(e):
         print(f"TP ya alcanzado, cerrando posición {symbol}")
         self.close_position(symbol, side)
-        return
+        return None, None
 
     try:
-      self._request("POST", "/fapi/v1/algoOrder", {
+      result = self._request("POST", "/fapi/v1/algoOrder", {
         "algoType": "CONDITIONAL",
         "symbol": symbol,
         "side": close_side,
@@ -191,8 +199,24 @@ class BinanceService:
         "closePosition": "true",
         "workingType": "CONTRACT_PRICE"
       })
+
+      sl_algo_id = result.get("algoId")
+
     except Exception as e:
       print(f"Error creando SL para {symbol}: {e}")
+
       if "-2021" in str(e):
         print(f"SL ya alcanzado, cerrando posición {symbol}")
         self.close_position(symbol, side)
+
+    return tp_algo_id, sl_algo_id
+
+  def get_algo_order(self, algo_id: int):
+    """Obtiene una orden condicional TP/SL por algoId."""
+    return self._request(
+      "GET",
+      "/fapi/v1/algoOrder",
+      {
+        "algoId": algo_id
+      }
+    )

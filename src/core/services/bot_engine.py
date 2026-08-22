@@ -161,9 +161,73 @@ class BotEngineService:
     except Exception as e:
       print(f"Error abriendo orden {decision.id} para {symbol}: {e}")
 
-  async def _mark_as_filled(self, db, decision, symbol: str, qty: float):
-    """Crea TP/SL y guarda FILLED cuando la orden de entrada se ejecutó."""
-    self.binance.set_tp_sl(
+  def _get_close_reason(self, decision):
+    """
+    Determina qué salida cerró la operación.
+
+    Retorna:
+      TAKE_PROFIT
+      STOP_LOSS
+      OTHER
+      None -> Binance todavía no refleja un estado final
+    """
+    tp_status = None
+    sl_status = None
+
+    if decision.tp_algo_id:
+      tp_order = self.binance.get_algo_order(
+        decision.tp_algo_id
+      )
+      tp_status = tp_order.get("algoStatus")
+
+    if decision.sl_algo_id:
+      sl_order = self.binance.get_algo_order(
+        decision.sl_algo_id
+      )
+      sl_status = sl_order.get("algoStatus")
+
+    if tp_status == "FINISHED" and sl_status != "FINISHED":
+      return "TAKE_PROFIT"
+
+    if sl_status == "FINISHED" and tp_status != "FINISHED":
+      return "STOP_LOSS"
+
+    terminal_statuses = {
+      "FINISHED",
+      "CANCELED",
+      "EXPIRED",
+      "REJECTED"
+    }
+
+    statuses = [
+      status
+      for status in (tp_status, sl_status)
+      if status is not None
+    ]
+
+    # Operaciones viejas que no tienen algoId.
+    if not statuses:
+      return "OTHER"
+
+    # Si Binance todavía está procesando alguna orden,
+    # esperamos al siguiente ciclo.
+    if any(
+      status not in terminal_statuses
+      for status in statuses
+    ):
+      return None
+
+    return "OTHER"
+
+  async def _mark_as_filled(
+    self,
+    db,
+    decision,
+    symbol: str,
+    qty: float
+  ):
+    """Crea TP/SL y guarda la operación como FILLED."""
+    tp_algo_id, sl_algo_id = self.binance.set_tp_sl(
       symbol,
       decision.side,
       qty,
@@ -174,7 +238,9 @@ class BotEngineService:
     await self.decision_repo.update_status(
       db,
       decision.id,
-      "FILLED"
+      "FILLED",
+      tp_algo_id=tp_algo_id,
+      sl_algo_id=sl_algo_id
     )
 
     self.telegram.send_trade_opened(
@@ -230,7 +296,7 @@ class BotEngineService:
           )
 
   async def check_filled_orders(self):
-    """Marca CLOSED únicamente cuando la posición ya no existe en Binance."""
+    """Detecta cierre de posiciones FILLED y guarda el motivo."""
     async with DatabaseSession() as db:
       filled = await self.decision_repo.get_decisions_by_statuses(
         db,
@@ -240,23 +306,34 @@ class BotEngineService:
       for decision, symbol in filled:
         try:
           if self.binance.has_open_position(symbol):
-            # Migra silenciosamente estados OPEN antiguos al nuevo FILLED.
             if decision.status == "OPEN":
               await self.decision_repo.update_status(
                 db,
                 decision.id,
                 "FILLED"
               )
+
+            continue
+
+          close_reason = self._get_close_reason(decision)
+
+          # Puede existir un pequeño delay entre el cierre de la
+          # posición y la actualización del Algo Order en Binance.
+          if close_reason is None:
             continue
 
           await self.decision_repo.update_status(
             db,
             decision.id,
-            "CLOSED"
+            "CLOSED",
+            close_reason=close_reason
           )
 
         except Exception as e:
-          print(f"Error checking filled order {decision.id}: {e}")
+          print(
+            f"Error checking filled order "
+            f"{decision.id}: {e}"
+          )
 
   async def check_planned_orders(self):
     """Expira PLANNED vencidas o las envía cuando el símbolo queda libre."""
