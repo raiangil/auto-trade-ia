@@ -1,0 +1,8 @@
+asyncpg==0.31.0
+joblib==1.5.1
+pandas==3.0.3
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+requests==2.34.2
+scikit-learn==1.9.0
+SQLAlchemy==2.0.51

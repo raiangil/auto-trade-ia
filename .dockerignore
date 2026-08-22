@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# Variables de entorno
+.env
+.env.*
+!.env.example
+
+# Caché y pruebas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Builds y paquetes
+build/
+dist/
+
+# Modelos (se montan como volumen)
+models/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Base de datos y archivos temporales
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+tmp/
+temp/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+docker-compose*.yaml
+.dockerignore
+
+# Documentación
+README.md
+docs/
+
+# Archivos subidos o generados
+uploads/
+media/
+staticfiles/
