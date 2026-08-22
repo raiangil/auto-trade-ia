@@ -1,7 +1,10 @@
 from datetime import datetime
-from src.core.models import DataSet, Decision
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.models import DataSet, Decision
+
 
 class DatasetRepository:
   @staticmethod
@@ -12,7 +15,10 @@ class DatasetRepository:
     await db.refresh(ds)
     return ds
 
+
 class DecisionRepository:
+  ACTIVE_STATUSES = ("PENDING", "FILLED", "OPEN")
+
   @staticmethod
   async def create_decision(db: AsyncSession, data: dict):
     dec = Decision(**data)
@@ -21,35 +27,72 @@ class DecisionRepository:
     await db.refresh(dec)
     return dec
 
-  @staticmethod
-  async def has_active_order(db: AsyncSession, symbol: str) -> bool:
+  @classmethod
+  async def has_active_order(cls, db: AsyncSession, symbol: str) -> bool:
+    """Indica si el símbolo tiene una orden enviada o una posición abierta."""
     result = await db.execute(
-      select(Decision).join(DataSet).where(
+      select(Decision.id)
+      .join(DataSet)
+      .where(
         DataSet.symbol == symbol,
-        Decision.status.in_(["PLANNED", "PENDING", "OPEN"]),
-        Decision.is_active == True
+        Decision.status.in_(cls.ACTIVE_STATUSES),
+        Decision.is_active.is_(True)
       )
+      .limit(1)
     )
-    return result.first() is not None
+    return result.scalar_one_or_none() is not None
 
   @staticmethod
-  async def update_status(db: AsyncSession, decision_id, status: str, ref_number: str = None):
-    result = await db.execute(select(Decision).where(Decision.id == decision_id))
-    dec = result.scalar_one_or_none()
-    if dec:
-      dec.status = status
-      if ref_number:
-        dec.ref_number = ref_number
-      dec.updated_at = datetime.utcnow()
-      await db.commit()
-    return dec
-
-  @staticmethod
-  async def get_decision_by_status(db: AsyncSession, status): 
+  async def has_planned_order(db: AsyncSession, symbol: str) -> bool:
+    """Evita acumular más de una oportunidad PLANNED por símbolo."""
     result = await db.execute(
-      select(Decision, DataSet.symbol).join(DataSet).where(
-        Decision.status == status,
-        Decision.is_active == True
+      select(Decision.id)
+      .join(DataSet)
+      .where(
+        DataSet.symbol == symbol,
+        Decision.status == "PLANNED",
+        Decision.is_active.is_(True)
       )
+      .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+  @staticmethod
+  async def update_status(
+    db: AsyncSession,
+    decision_id,
+    status: str,
+    ref_number: str | None = None
+  ):
+    result = await db.execute(
+      select(Decision).where(Decision.id == decision_id)
+    )
+    decision = result.scalar_one_or_none()
+
+    if decision is None:
+      return None
+
+    decision.status = status
+    if ref_number is not None:
+      decision.ref_number = ref_number
+
+    decision.updated_at = datetime.utcnow()
+    await db.commit()
+    return decision
+
+  @classmethod
+  async def get_decision_by_status(cls, db: AsyncSession, status: str):
+    return await cls.get_decisions_by_statuses(db, [status])
+
+  @staticmethod
+  async def get_decisions_by_statuses(db: AsyncSession, statuses: list[str]):
+    result = await db.execute(
+      select(Decision, DataSet.symbol)
+      .join(DataSet)
+      .where(
+        Decision.status.in_(statuses),
+        Decision.is_active.is_(True)
+      )
+      .order_by(Decision.created_at.asc())
     )
     return result.all()
