@@ -91,7 +91,23 @@ class Settings(BaseSettings):
     case_sensitive=False,
     extra="ignore"  # Ignora variables extra del .env
   )
-
+  min_opp_prob: float = Field(
+    description="Minimum opportunity probability to consider a trade"
+  )
+  min_dir_prob: float = Field(  
+    description="Minimum direction probability to consider a trade"
+  )
+  min_amount_for_operation: str = Field(
+    description="Minimum amount per symbol as JSON body, e.g. '\"BTCUSDT\":0.001'"
+  )
+  entry_price_offset_pct: float = Field(
+    default=0.0,
+    description="Percent to shift entry price in favor of the trade (LONG=lower, SHORT=higher), rotates TP/SL accordingly"
+  )
+  float_per_symbol: dict[str, tuple[int, int]] = Field(
+    default_factory=dict,
+    description="Precision for each symbol (price decimals, quantity decimals)"
+  )
 
 # Instancia única de configuración
 settings = Settings()

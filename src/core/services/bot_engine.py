@@ -14,7 +14,18 @@ from .telegram_notification import TelegramNotificationService
 # 3:1 ratio -> 2% TP, 0.67% SL
 TP_PCT = 0.02
 SL_PCT = 0.0067
-MIN_OPP_PROB = 0.57
+MIN_OPP_PROB = 0.58
+MIN_DIR_PROB = 0.56
+
+
+def calculate_entry_price(signal_price: float, side: str, entry_offset_pct: float) -> float:
+  """Desplaza signal_price a favor del trade: BUY baja, SELL sube."""
+  offset = entry_offset_pct / 100
+  if not offset:
+    return round(signal_price, 2)
+  if side == "BUY":
+    return round(signal_price * (1 - offset), 2)
+  return round(signal_price * (1 + offset), 2)
 
 
 class BotEngineService:
@@ -47,13 +58,15 @@ class BotEngineService:
       if trade is None:
         return
 
-      side, entry, tp, sl, opp_prob, dir_prob = trade
+      side, signal_price, entry, tp, sl, opp_prob, dir_prob, offset_pct = trade
 
       decision = await self.decision_repo.create_decision(db, {
         "dataset_id": dataset.id,
         "status": "PLANNED",
         "side": side,
         "entry_price": entry,
+        "signal_price": signal_price,
+        "entry_offset_pct": offset_pct,
         "tp_price": tp,
         "sl_price": sl,
         "opportunity_prob": opp_prob,
@@ -96,7 +109,7 @@ class BotEngineService:
     else:
       side, dir_prob = "BUY", long_prob
 
-    if dir_prob < 0.5:
+    if dir_prob < MIN_DIR_PROB:
       self.telegram.send_trade_rejected(
         self.chat_id,
         symbol,
@@ -114,9 +127,12 @@ class BotEngineService:
       (side == "BUY" and current_price > candle_close)
       or (side == "SELL" and current_price < candle_close)
     ):
-      entry = candle_close
+      signal_price = candle_close
     else:
-      entry = current_price
+      signal_price = current_price
+
+    offset_pct = settings.entry_price_offset_pct
+    entry = calculate_entry_price(signal_price, side, offset_pct)
 
     if side == "BUY":
       tp = round(entry * (1 + TP_PCT), 2)
@@ -125,7 +141,13 @@ class BotEngineService:
       tp = round(entry * (1 - TP_PCT), 2)
       sl = round(entry * (1 + SL_PCT), 2)
 
-    return side, entry, tp, sl, opp_prob, dir_prob
+    print(
+      f"[{symbol}] side={side} signal_price={signal_price} "
+      f"entry_offset_pct={offset_pct} entry_price={entry} "
+      f"tp_price={tp} sl_price={sl}"
+    )
+
+    return side, signal_price, entry, tp, sl, opp_prob, dir_prob, offset_pct
 
   async def _submit_order(self, db, decision, symbol: str):
     """Envía una decisión PLANNED a Binance cuando el símbolo está libre."""
@@ -288,6 +310,24 @@ class BotEngineService:
               decision.id,
               "CANCELLED"
             )
+          elif self._tp_reached_before_fill(decision, symbol):
+            # El precio ya llegó al TP sin llenar la entrada: ya no aplica.
+            self.binance.cancel_order(symbol, decision.ref_number)
+            await self.decision_repo.update_status(
+              db,
+              decision.id,
+              "CANCELLED"
+            )
+            self.telegram.send_info(
+              self.chat_id,
+              "check_pending_orders",
+              "ORDEN INVALIDADA",
+              (
+                f"Orden PENDING {decision.id} para {symbol} se canceló: "
+                "el precio alcanzó el TP antes de llenarse la entrada."
+              ),
+              f"{decision.id}"
+            )
 
         except Exception as e:
           print(
@@ -365,6 +405,43 @@ class BotEngineService:
         if await self.decision_repo.has_active_order(db, symbol):
           continue
 
+        # Recalcular entry/TP/SL con precio actual antes de enviar.
+        # signal_price y entry_offset_pct NO se tocan: quedan fijos desde
+        # la creación de la señal. Fallback a settings solo para registros
+        # históricos donde entry_offset_pct sea NULL.
+        offset_pct = (
+          decision.entry_offset_pct
+          if decision.entry_offset_pct is not None
+          else settings.entry_price_offset_pct
+        )
+        current_price = self.market_service.get_current_price_symbol(symbol)
+        candidate_entry = calculate_entry_price(
+          current_price, decision.side, offset_pct
+        )
+
+        # BUY: usar el precio más bajo (mejor entrada)
+        # SELL: usar el precio más alto (mejor entrada)
+        if decision.side == "BUY":
+          entry = min(candidate_entry, decision.entry_price)
+        else:
+          entry = max(candidate_entry, decision.entry_price)
+
+        # Recalcular TP/SL basado en el nuevo entry
+        if decision.side == "BUY":
+          tp = round(entry * (1 + TP_PCT), 2)
+          sl = round(entry * (1 - SL_PCT), 2)
+        else:
+          tp = round(entry * (1 - TP_PCT), 2)
+          sl = round(entry * (1 + SL_PCT), 2)
+        
+        # Actualizar precios en la decisión
+        await self.decision_repo.update_prices(
+          db, decision.id, entry, tp, sl
+        )
+        decision.entry_price = entry
+        decision.tp_price = tp
+        decision.sl_price = sl
+
         await self._submit_order(db, decision, symbol)
 
   async def check_order_cancelation(self):
@@ -418,6 +495,13 @@ class BotEngineService:
       else datetime.now()
     )
     return now >= expiration_time
+
+  def _tp_reached_before_fill(self, decision, symbol: str) -> bool:
+    """True si el mercado ya tocó el TP sin que la entrada se haya llenado."""
+    current_price = self.market_service.get_current_price_symbol(symbol)
+    if decision.side == "BUY":
+      return current_price >= decision.tp_price
+    return current_price <= decision.tp_price
 
   async def run_loop(self):
     last_run = {

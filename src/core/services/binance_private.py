@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import time
 from urllib.parse import urlencode
+import json
 
 import requests
 
@@ -19,12 +20,7 @@ class BinanceService:
       "ETHUSDT": (3, 2),
       "BNBUSDT": (2, 1)
     }
-    self.min_amount = {
-      "BTCUSDT": 0.001,
-      "ETHUSDT": 0.011,
-      "BNBUSDT": 0.01,
-      "SOLUSDT": 0.07
-    }
+    self.min_amount = json.loads(f"{{{settings.min_amount_for_operation}}}")
 
   def _sign(self, params: dict) -> str:
     qs = urlencode(params)

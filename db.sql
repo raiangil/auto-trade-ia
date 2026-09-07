@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS jik_001t ( --decisions/orders table
   status text not null default 'PLANNED', -- PLANNED, OPEN, CLOSED
   side text not null, -- BUY, SELL
   entry_price numeric not null,
+  signal_price numeric,
+  entry_offset_pct numeric,
   tp_price numeric,
   sl_price numeric,
   tp_algo_id BIGINT,

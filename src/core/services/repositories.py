@@ -98,6 +98,28 @@ class DecisionRepository:
 
     return decision
 
+  @staticmethod
+  async def update_prices(
+    db: AsyncSession,
+    decision_id,
+    entry_price: float,
+    tp_price: float,
+    sl_price: float
+  ):
+    result = await db.execute(
+      select(Decision).where(Decision.id == decision_id)
+    )
+    decision = result.scalar_one_or_none()
+    if decision is None:
+      return None
+    
+    decision.entry_price = entry_price
+    decision.tp_price = tp_price
+    decision.sl_price = sl_price
+    decision.updated_at = datetime.now()
+    await db.commit()
+    return decision
+
   @classmethod
   async def get_decision_by_status(cls, db: AsyncSession, status: str):
     return await cls.get_decisions_by_statuses(db, [status])
